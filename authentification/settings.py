@@ -47,7 +47,9 @@ INSTALLED_APPS = [
     'django_rest_passwordreset',
     "users",
     "produits_stocks",
-    "achats_fournisseurs"
+    "achats_fournisseurs",
+    "ventes_clients",
+    "finances",
 ]
 
 MIDDLEWARE = [
