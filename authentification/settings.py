@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     'knox',
     'django_rest_passwordreset',
     "users",
+    "produits_stocks",
+    "achats_fournisseurs"
 ]
 
 MIDDLEWARE = [
