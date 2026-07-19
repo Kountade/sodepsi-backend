@@ -302,49 +302,55 @@ class Client(models.Model):
 # ============================================================
 # DEVIS
 # ============================================================
+# apps/ventes_clients/models.py - DEVIS SEULEMENT
 
+from django.db import models
+from django.utils import timezone
+from datetime import date, timedelta
+from decimal import Decimal
+import qrcode
+from io import BytesIO
+from django.core.files import File
+
+from users.models import CustomUser
+from produits_stocks.models import Product, Lot, Warehouse, Stock, StockMovement
+
+
+# ==================== DEVIS ====================
 class Devis(models.Model):
-
+    """
+    Devis / Proforma
+    """
     STATUS_CHOICES = (
-        ("draft", "Brouillon"),
-        ("sent", "Envoyé"),
-        ("accepted", "Accepté"),
-        ("refused", "Refusé"),
-        ("expired", "Expiré"),
-        ("converted", "Converti en vente"),
+        ('draft', 'Brouillon'),
+        ('sent', 'Envoyé'),
+        ('accepted', 'Accepté'),
+        ('refused', 'Refusé'),
+        ('expired', 'Expiré'),
+        ('converted', 'Converti en vente'),
     )
 
     devis_number = models.CharField(
-        max_length=50,
-        unique=True,
-        verbose_name="N° Devis"
+        max_length=50, unique=True, verbose_name="N° Devis"
     )
-
     client = models.ForeignKey(
-        Client,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="devis"
+        'Client', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='devis'
     )
-
     client_name = models.CharField(
-        max_length=200,
-        blank=True,
-        verbose_name="Nom client"
+        max_length=200, verbose_name="Nom client"
     )
-
     client_phone = models.CharField(
-        max_length=20,
-        blank=True
+        max_length=20, blank=True, verbose_name="Téléphone client"
     )
-
     client_email = models.EmailField(
-        blank=True
+        blank=True, verbose_name="Email client"
     )
-
     client_address = models.TextField(
-        blank=True
+        blank=True, verbose_name="Adresse client"
     )
 
     warehouse = models.ForeignKey(
@@ -352,218 +358,262 @@ class Devis(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="devis"
+        related_name='devis',
+        verbose_name="Entrepôt"
     )
 
     devis_date = models.DateTimeField(
-        auto_now_add=True
+        auto_now_add=True, verbose_name="Date devis"
     )
-
-    valid_until = models.DateField()
+    valid_until = models.DateField(
+        verbose_name="Valable jusqu'au"
+    )
 
     subtotal = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=0, verbose_name="Sous-total"
     )
-
     discount_type = models.CharField(
-        max_length=20,
+        max_length=20, 
         choices=[
-            ("percentage", "Pourcentage"),
-            ("amount", "Montant"),
-        ],
-        default="percentage"
+            ('percentage', 'Pourcentage'),
+            ('amount', 'Montant')
+        ], 
+        default='percentage', 
+        verbose_name="Type remise"
     )
-
     discount_value = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=10, decimal_places=2, default=0, verbose_name="Valeur remise"
     )
-
     discount_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=10, decimal_places=2, default=0, verbose_name="Montant remise"
     )
-
     tax_rate = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=5, decimal_places=2, default=0, verbose_name="Taux TVA (%)"
     )
-
     tax_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=10, decimal_places=2, default=0, verbose_name="Montant TVA"
     )
-
     shipping_fee = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=10, decimal_places=2, default=0, verbose_name="Frais de livraison"
     )
-
     total = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=Decimal("0.00")
+        max_digits=12, decimal_places=2, default=0, verbose_name="Total TTC"
     )
 
     status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default="draft"
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='draft', 
+        verbose_name="Statut"
     )
-
-    notes = models.TextField(
-        blank=True
-    )
-
-    internal_notes = models.TextField(
-        blank=True
-    )
+    notes = models.TextField(blank=True, verbose_name="Notes")
+    internal_notes = models.TextField(blank=True, verbose_name="Notes internes")
 
     sale = models.ForeignKey(
-        "Vente",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="devis_source"
+        'Vente', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='devis_source'
     )
 
     qr_code = models.ImageField(
-        upload_to="qrcodes/devis/",
-        null=True,
-        blank=True
+        upload_to='qrcodes/devis/', 
+        null=True, 
+        blank=True, 
+        verbose_name="QR Code"
     )
-
     qr_code_data = models.TextField(
-        blank=True
+        blank=True, verbose_name="Données QR Code"
     )
 
     created_at = models.DateTimeField(
-        auto_now_add=True
+        auto_now_add=True, verbose_name="Date création"
     )
-
     updated_at = models.DateTimeField(
-        auto_now=True
+        auto_now=True, verbose_name="Date modification"
     )
-
     created_by = models.ForeignKey(
-        CustomUser,
+        CustomUser, 
         on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="devis_created"
+        null=True, 
+        blank=True, 
+        related_name='devis', 
+        verbose_name="Créé par"
     )
 
     class Meta:
         verbose_name = "Devis"
         verbose_name_plural = "Devis"
-        ordering = ["-devis_date"]
+        ordering = ['-devis_date']
 
     def __str__(self):
         return f"{self.devis_number} - {self.client_name}"
 
-    def calculate_totals(self, save=True):
+    def calculate_totals(self):
+        """
+        Calcule les totaux du devis
+        """
+        self.subtotal = sum(line.total for line in self.lignes.all())
 
-        self.subtotal = sum(
-            (
-                line.total
-                for line in self.lignes.all()
-            ),
-            Decimal("0.00")
-        )
-
-        if self.discount_type == "percentage":
-
-            self.discount_amount = (
-                self.subtotal
-                * self.discount_value
-                / Decimal("100")
-            )
-
+        if self.discount_type == 'percentage':
+            self.discount_amount = self.subtotal * (self.discount_value / 100)
         else:
-
             self.discount_amount = self.discount_value
 
-        self.discount_amount = min(
-            self.discount_amount,
-            self.subtotal
-        )
-
-        after_discount = (
-            self.subtotal
-            - self.discount_amount
-        )
-
-        self.tax_amount = (
-            after_discount
-            * self.tax_rate
-            / Decimal("100")
-        )
-
-        self.total = (
-            after_discount
-            + self.tax_amount
-            + self.shipping_fee
-        )
-
-        if save and self.pk:
-
-            super().save(
-                update_fields=[
-                    "subtotal",
-                    "discount_amount",
-                    "tax_amount",
-                    "total",
-                    "updated_at"
-                ]
-            )
+        after_discount = self.subtotal - self.discount_amount
+        self.tax_amount = after_discount * (self.tax_rate / 100)
+        self.total = after_discount + self.tax_amount + self.shipping_fee
+        
+        # Sauvegarder sans déclencher de boucle
+        super().save(update_fields=[
+            'subtotal', 'discount_amount', 'tax_amount', 'total'
+        ])
 
     def generate_qr_code(self):
-
-        if not self.pk or not self.devis_number:
+        """
+        Génère un QR Code pour le devis
+        """
+        if not self.devis_number:
             return
 
-        data = {
-            "type": "devis",
-            "id": self.id,
-            "number": self.devis_number,
-            "client": self.client_name,
-            "total": str(self.total),
-            "status": self.status,
-            "url": f"/devis/{self.id}/",
+        import json
+        qr_data = {
+            'type': 'devis',
+            'id': self.id,
+            'number': self.devis_number,
+            'client': self.client_name,
+            'total': str(self.total),
+            'date': self.devis_date.strftime('%Y-%m-%d %H:%M:%S'),
+            'valid_until': self.valid_until.strftime('%Y-%m-%d'),
+            'status': self.status,
+            'url': f'/devis/{self.id}/'
         }
 
-        qr_data, buffer = generate_qr_image(data)
+        qr_data_str = json.dumps(qr_data, ensure_ascii=False)
+        self.qr_code_data = qr_data_str
 
-        self.qr_code_data = qr_data
-
-        self.qr_code.save(
-            f"qr_devis_{self.devis_number}.png",
-            File(buffer),
-            save=False
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
         )
+        qr.add_data(qr_data_str)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+
+        filename = f"qr_devis_{self.devis_number}.png"
+        self.qr_code.save(filename, File(buffer), save=False)
 
     def save(self, *args, **kwargs):
+        """
+        Sauvegarde avec génération automatique du QR Code
+        """
+        # Sauvegarder d'abord si c'est une nouvelle instance
+        if not self.pk:
+            super().save(*args, **kwargs)
+        
+        # Générer le QR Code si nécessaire
+        if not self.qr_code or not self.qr_code_data:
+            self.generate_qr_code()
+            super().save(update_fields=['qr_code', 'qr_code_data'])
+        else:
+            super().save(*args, **kwargs)
 
-        if not self.devis_number:
+    # ✅ METHODE CONVERT_TO_SALE CORRIGÉE
+    def convert_to_sale(self, user=None):
+        """
+        Convertit le devis en vente
+        """
+        from .models import Vente, LigneVente
 
-            self.devis_number = generate_number(
-                Devis,
-                "devis_number",
-                "DEV"
+        # Vérifications préalables
+        if not self.warehouse:
+            raise ValueError(
+                "L'entrepôt doit être défini pour convertir le devis en vente"
             )
 
-        super().save(*args, **kwargs)
+        if self.status != 'accepted':
+            raise ValueError(
+                "Seul un devis accepté peut être converti en vente"
+            )
+
+        if self.sale:
+            raise ValueError(
+                "Ce devis a déjà été converti en vente"
+            )
+
+        # Générer le numéro de facture
+        last_vente = Vente.objects.order_by('-id').first()
+        if last_vente and last_vente.invoice_number:
+            try:
+                num = int(last_vente.invoice_number.split('-')[-1]) + 1
+            except (ValueError, IndexError):
+                num = 1
+        else:
+            num = 1
+        invoice_number = f"INV-{date.today().year}-{num:04d}"
+
+        # ✅ ÉTAPE 1: Créer la vente en brouillon
+        vente = Vente(
+            invoice_number=invoice_number,
+            client=self.client,
+            client_name=self.client_name or "Client anonyme",
+            client_phone=self.client_phone,
+            client_email=self.client_email,
+            client_address=self.client_address,
+            warehouse=self.warehouse,
+            payment_due_date=date.today() + timedelta(days=30),
+            subtotal=self.subtotal,
+            discount_type=self.discount_type,
+            discount_value=self.discount_value,
+            discount_amount=self.discount_amount,
+            tax_rate=self.tax_rate,
+            tax_amount=self.tax_amount,
+            shipping_fee=self.shipping_fee,
+            total=self.total,
+            notes=self.notes,
+            internal_notes=self.internal_notes,
+            status='draft',  # ✅ Statut brouillon - PAS de déduction de stock
+            created_by=user
+        )
+        vente.save()
+
+        # ✅ ÉTAPE 2: Créer les lignes de vente à partir du devis
+        for ligne_devis in self.lignes.all():
+            LigneVente.objects.create(
+                sale=vente,
+                product=ligne_devis.product,
+                quantity=ligne_devis.quantity,
+                unit_price=ligne_devis.unit_price,
+                discount=ligne_devis.discount,
+                tax_rate=ligne_devis.tax_rate,
+                total=ligne_devis.total,
+                notes=ligne_devis.notes
+            )
+
+        # ✅ ÉTAPE 3: Mettre à jour le statut du devis
+        self.status = 'converted'
+        self.sale = vente
+        self.save(update_fields=['status', 'sale'])
+
+        # ✅ ÉTAPE 4: Recalculer les totaux de la vente
+        vente.calculate_totals()
+        
+        # ✅ ÉTAPE 5: Générer le QR Code de la vente
+        vente.generate_qr_code()
+        vente.save(update_fields=['qr_code', 'qr_code_data'])
+
+        return vente
 
 
-# ============================================================
-# LIGNE DEVIS
+# ==================== LIGNE DEVIS ====================
+
 # ============================================================
 
 class LigneDevis(models.Model):
