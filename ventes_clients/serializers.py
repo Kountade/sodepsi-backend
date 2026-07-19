@@ -6,8 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from .models import (
     Client, Vente, LigneVente, Paiement, Facture,
-    Avoir, Taxe, Remise, PointDeVente, SessionCaisse, MouvementCaisse,
-    Devis, LigneDevis
+    Avoir, Taxe, Remise, Devis, LigneDevis
 )
 from produits_stocks.models import Product, Lot, Stock, StockMovement
 from produits_stocks.serializers import ProductListSerializer, LotListSerializer
@@ -103,6 +102,8 @@ class DevisListSerializer(serializers.ModelSerializer):
     total_display = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     has_been_converted = serializers.SerializerMethodField()
+    warehouse_name = serializers.CharField(
+        source='warehouse.name', read_only=True)
 
     class Meta:
         model = Devis
@@ -110,7 +111,7 @@ class DevisListSerializer(serializers.ModelSerializer):
             'id', 'devis_number', 'client', 'client_name',
             'devis_date', 'valid_until', 'total', 'total_display',
             'status', 'status_display', 'is_expired', 'has_been_converted',
-            'created_by'
+            'warehouse', 'warehouse_name', 'created_by'
         ]
         read_only_fields = ['id', 'devis_date', 'devis_number']
 
@@ -138,8 +139,11 @@ class DevisDetailSerializer(serializers.ModelSerializer):
     total_display = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     sale_info = serializers.SerializerMethodField()
+    warehouse_name = serializers.CharField(
+        source='warehouse.name', read_only=True)
+    warehouse_code = serializers.CharField(
+        source='warehouse.code', read_only=True)
 
-    # QR Code fields
     qr_code = serializers.ImageField(read_only=True)
     qr_code_data = serializers.CharField(read_only=True)
     qr_code_url = serializers.SerializerMethodField()
@@ -154,6 +158,7 @@ class DevisDetailSerializer(serializers.ModelSerializer):
             'tax_rate', 'tax_amount', 'shipping_fee', 'total', 'total_display',
             'status', 'status_display', 'is_expired',
             'notes', 'internal_notes', 'lignes', 'sale', 'sale_info',
+            'warehouse', 'warehouse_name', 'warehouse_code',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
             'qr_code', 'qr_code_data', 'qr_code_url'
         ]
@@ -187,7 +192,7 @@ class DevisCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Devis
         fields = [
-            'client', 'valid_until',
+            'client', 'warehouse', 'valid_until',
             'discount_type', 'discount_value', 'tax_rate', 'shipping_fee',
             'notes', 'internal_notes', 'lignes'
         ]
@@ -201,6 +206,19 @@ class DevisCreateSerializer(serializers.ModelSerializer):
     def validate_lignes(self, value):
         if not value:
             raise serializers.ValidationError("Au moins un produit est requis")
+
+        # Vérification des doublons
+        product_ids = [line.get('product')
+                       for line in value if line.get('product')]
+        if len(product_ids) != len(set(product_ids)):
+            raise serializers.ValidationError(
+                "Un produit ne peut apparaître qu'une seule fois dans le devis."
+            )
+        return value
+
+    def validate_warehouse(self, value):
+        if not value:
+            raise serializers.ValidationError("Un entrepôt est requis")
         return value
 
     @transaction.atomic
@@ -208,7 +226,6 @@ class DevisCreateSerializer(serializers.ModelSerializer):
         lignes_data = validated_data.pop('lignes')
         client = validated_data.get('client')
 
-        # Générer le numéro de devis
         last_devis = Devis.objects.order_by('-id').first()
         if last_devis and last_devis.devis_number:
             try:
@@ -219,7 +236,6 @@ class DevisCreateSerializer(serializers.ModelSerializer):
             num = 1
         devis_number = f"DEV-{date.today().year}-{num:04d}"
 
-        # Créer le devis
         devis = Devis.objects.create(
             devis_number=devis_number,
             client_name=client.name if client else '',
@@ -229,7 +245,6 @@ class DevisCreateSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        # Créer les lignes
         for line_data in lignes_data:
             LigneDevis.objects.create(devis=devis, **line_data)
 
@@ -316,6 +331,8 @@ class VenteListSerializer(serializers.ModelSerializer):
     total_display = serializers.SerializerMethodField()
     has_facture = serializers.SerializerMethodField()
     from_devis = serializers.SerializerMethodField()
+    warehouse_name = serializers.CharField(
+        source='warehouse.name', read_only=True)
 
     class Meta:
         model = Vente
@@ -323,7 +340,7 @@ class VenteListSerializer(serializers.ModelSerializer):
             'id', 'invoice_number', 'order_number', 'client', 'client_name',
             'sale_date', 'total', 'total_display', 'status', 'status_display',
             'payment_status', 'payment_status_display', 'amount_paid', 'amount_due',
-            'created_by', 'has_facture', 'from_devis'
+            'warehouse', 'warehouse_name', 'created_by', 'has_facture', 'from_devis'
         ]
         read_only_fields = ['id', 'sale_date', 'invoice_number']
 
@@ -354,8 +371,11 @@ class VenteDetailSerializer(serializers.ModelSerializer):
         source='created_by.full_name', read_only=True)
     total_display = serializers.SerializerMethodField()
     from_devis = serializers.SerializerMethodField()
+    warehouse_name = serializers.CharField(
+        source='warehouse.name', read_only=True)
+    warehouse_code = serializers.CharField(
+        source='warehouse.code', read_only=True)
 
-    # QR Code fields
     qr_code = serializers.ImageField(read_only=True)
     qr_code_data = serializers.CharField(read_only=True)
     qr_code_url = serializers.SerializerMethodField()
@@ -372,6 +392,7 @@ class VenteDetailSerializer(serializers.ModelSerializer):
             'amount_paid', 'amount_due', 'delivery_method', 'delivery_address',
             'delivery_status', 'tracking_number', 'status', 'status_display',
             'notes', 'internal_notes', 'lines', 'payments', 'factures',
+            'warehouse', 'warehouse_name', 'warehouse_code',
             'created_at', 'updated_at', 'created_by', 'created_by_name',
             'qr_code', 'qr_code_data', 'qr_code_url', 'from_devis'
         ]
@@ -410,7 +431,7 @@ class VenteCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vente
         fields = [
-            'client', 'delivery_date', 'payment_due_date',
+            'client', 'warehouse', 'delivery_date', 'payment_due_date',
             'discount_type', 'discount_value', 'tax_rate', 'shipping_fee',
             'payment_method', 'delivery_method', 'delivery_address',
             'notes', 'internal_notes', 'lines'
@@ -425,6 +446,24 @@ class VenteCreateSerializer(serializers.ModelSerializer):
     def validate_lines(self, value):
         if not value:
             raise serializers.ValidationError("Au moins un produit est requis")
+
+        product_ids = []
+        for line in value:
+            product_id = line.get('product')
+            if product_id:
+                if hasattr(product_id, 'id'):
+                    product_id = product_id.id
+                product_ids.append(product_id)
+
+        if len(product_ids) != len(set(product_ids)):
+            raise serializers.ValidationError(
+                "Un produit ne peut apparaître qu'une seule fois dans la vente."
+            )
+        return value
+
+    def validate_warehouse(self, value):
+        if not value:
+            raise serializers.ValidationError("Un entrepôt est requis")
         return value
 
     @transaction.atomic
@@ -432,6 +471,7 @@ class VenteCreateSerializer(serializers.ModelSerializer):
         lines_data = validated_data.pop('lines')
         client = validated_data.get('client')
 
+        # ✅ CORRECTION ICI : year est un attribut, pas une méthode
         last_vente = Vente.objects.order_by('-id').first()
         if last_vente and last_vente.invoice_number:
             try:
@@ -462,20 +502,51 @@ class VenteCreateSerializer(serializers.ModelSerializer):
 
 
 class VenteUpdateSerializer(serializers.ModelSerializer):
+    lines = LigneVenteCreateSerializer(many=True, required=False)
+
     class Meta:
         model = Vente
         fields = [
             'delivery_date', 'payment_due_date', 'discount_type',
             'discount_value', 'tax_rate', 'shipping_fee',
             'payment_method', 'delivery_method', 'delivery_address',
-            'notes', 'internal_notes', 'tracking_number'
+            'notes', 'internal_notes', 'tracking_number', 'lines'
         ]
+
+    def validate_lines(self, value):
+        if value is None:
+            return value
+
+        if not value:
+            raise serializers.ValidationError("Au moins un produit est requis")
+
+        product_ids = []
+        for line in value:
+            product_id = line.get('product')
+            if product_id:
+                if hasattr(product_id, 'id'):
+                    product_id = product_id.id
+                product_ids.append(product_id)
+
+        if len(product_ids) != len(set(product_ids)):
+            raise serializers.ValidationError(
+                "Un produit ne peut apparaître qu'une seule fois dans la vente."
+            )
+        return value
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        lines_data = validated_data.pop('lines', None)
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        if lines_data is not None:
+            instance.lines.all().delete()
+            for line_data in lines_data:
+                LigneVente.objects.create(sale=instance, **line_data)
+
         instance.calculate_totals()
         instance.generate_qr_code()
         instance.save()
@@ -507,7 +578,6 @@ class FactureSerializer(serializers.ModelSerializer):
     total_display = serializers.SerializerMethodField()
     remaining_display = serializers.SerializerMethodField()
 
-    # QR Code fields
     qr_code = serializers.ImageField(read_only=True)
     qr_code_data = serializers.CharField(read_only=True)
     qr_code_url = serializers.SerializerMethodField()
@@ -598,7 +668,6 @@ class PaiementSerializer(serializers.ModelSerializer):
     received_by_name = serializers.CharField(
         source='received_by.full_name', read_only=True)
 
-    # Informations de la facture
     facture_number = serializers.CharField(
         source='facture.invoice_number', read_only=True)
     client_name = serializers.CharField(
@@ -607,7 +676,6 @@ class PaiementSerializer(serializers.ModelSerializer):
     facture_total = serializers.SerializerMethodField()
     amount_display = serializers.SerializerMethodField()
 
-    # QR Code fields
     qr_code = serializers.ImageField(read_only=True)
     qr_code_data = serializers.CharField(read_only=True)
     qr_code_url = serializers.SerializerMethodField()
@@ -772,127 +840,6 @@ class RemiseSerializer(serializers.ModelSerializer):
         if obj.type == 'percentage':
             return f"{obj.value}%"
         return f"{obj.value:,.0f} FCFA"
-
-
-# ==================== POINT DE VENTE ====================
-class PointDeVenteSerializer(serializers.ModelSerializer):
-    warehouse_name = serializers.CharField(
-        source='warehouse.name', read_only=True)
-
-    class Meta:
-        model = PointDeVente
-        fields = ['id', 'name', 'code', 'warehouse',
-                  'warehouse_name', 'is_active']
-        read_only_fields = ['id']
-
-
-# ==================== SESSION CAISSE ====================
-class SessionCaisseSerializer(serializers.ModelSerializer):
-    point_de_vente_name = serializers.CharField(
-        source='point_de_vente.name', read_only=True)
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
-    status_display = serializers.CharField(
-        source='get_status_display', read_only=True)
-    movements = serializers.SerializerMethodField()
-    opening_balance_display = serializers.SerializerMethodField()
-    closing_balance_display = serializers.SerializerMethodField()
-    expected_balance_display = serializers.SerializerMethodField()
-    difference_display = serializers.SerializerMethodField()
-
-    class Meta:
-        model = SessionCaisse
-        fields = [
-            'id', 'point_de_vente', 'point_de_vente_name',
-            'user', 'user_name', 'opening_date', 'closing_date',
-            'opening_balance', 'opening_balance_display',
-            'closing_balance', 'closing_balance_display',
-            'expected_balance', 'expected_balance_display',
-            'difference', 'difference_display',
-            'status', 'status_display', 'notes', 'movements'
-        ]
-        read_only_fields = ['id', 'opening_date', 'closing_date']
-
-    def get_movements(self, obj):
-        movements = obj.movements.all()
-        return MouvementCaisseSerializer(movements, many=True).data
-
-    def get_opening_balance_display(self, obj):
-        return f"{obj.opening_balance:,.0f} FCFA" if obj.opening_balance else "0 FCFA"
-
-    def get_closing_balance_display(self, obj):
-        return f"{obj.closing_balance:,.0f} FCFA" if obj.closing_balance else "0 FCFA"
-
-    def get_expected_balance_display(self, obj):
-        return f"{obj.expected_balance:,.0f} FCFA" if obj.expected_balance else "0 FCFA"
-
-    def get_difference_display(self, obj):
-        return f"{obj.difference:,.0f} FCFA" if obj.difference else "0 FCFA"
-
-
-class SessionCaisseCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SessionCaisse
-        fields = ['point_de_vente', 'opening_balance', 'notes']
-
-    def validate_opening_balance(self, value):
-        if value < 0:
-            raise serializers.ValidationError(
-                "Le solde d'ouverture ne peut pas être négatif")
-        return value
-
-    def validate(self, data):
-        point_de_vente = data.get('point_de_vente')
-        if SessionCaisse.objects.filter(point_de_vente=point_de_vente, status='open').exists():
-            raise serializers.ValidationError(
-                "Une session est déjà ouverte pour ce point de vente")
-        return data
-
-
-# ==================== MOUVEMENT CAISSE ====================
-class MouvementCaisseSerializer(serializers.ModelSerializer):
-    type_display = serializers.CharField(
-        source='get_type_display', read_only=True)
-    created_by_name = serializers.CharField(
-        source='created_by.full_name', read_only=True)
-    amount_display = serializers.SerializerMethodField()
-
-    class Meta:
-        model = MouvementCaisse
-        fields = [
-            'id', 'session', 'type', 'type_display', 'amount', 'amount_display',
-            'description', 'reference', 'created_at', 'created_by',
-            'created_by_name'
-        ]
-        read_only_fields = ['id', 'created_at']
-
-    def get_amount_display(self, obj):
-        return f"{obj.amount:,.0f} FCFA" if obj.amount else "0 FCFA"
-
-
-class MouvementCaisseCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = MouvementCaisse
-        fields = ['session', 'type', 'amount', 'description', 'reference']
-
-    def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                "Le montant doit être supérieur à 0")
-        return value
-
-    def validate(self, data):
-        session = data.get('session')
-        if session and session.status != 'open':
-            raise serializers.ValidationError(
-                "La session de caisse est fermée")
-
-        type_value = data.get('type')
-        allowed_types = ['sale', 'payment', 'deposit', 'withdrawal', 'expense']
-        if type_value not in allowed_types:
-            raise serializers.ValidationError(
-                f"Type invalide. Choisir parmi: {', '.join(allowed_types)}")
-
-        return data
 
 
 # ==================== DASHBOARD STATS SERIALIZERS ====================
