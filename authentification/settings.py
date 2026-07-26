@@ -44,11 +44,13 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'knox',
+    'django_filters',
     'django_rest_passwordreset',
     "users",
     "produits_stocks",
     "achats_fournisseurs",
     "ventes_clients",
+    "tresorerie",
     "finances",
 ]
 
