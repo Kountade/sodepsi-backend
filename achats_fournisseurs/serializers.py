@@ -372,6 +372,8 @@ class ReceiptDetailSerializer(serializers.ModelSerializer):
             return obj.qr_code.url
         return None
 
+# apps/achats_fournisseurs/serializers.py
+
 
 class ReceiptCreateSerializer(serializers.ModelSerializer):
     lines = ReceiptLineCreateSerializer(many=True)
@@ -406,9 +408,15 @@ class ReceiptCreateSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        from produits_stocks.models import Stock, StockMovement
+        from django.db import transaction
+
         lines_data = validated_data.pop('lines')
         purchase_order = validated_data.get('purchase_order')
+        warehouse = validated_data.get('warehouse')
+        user = self.context['request'].user
 
+        # Générer le numéro de réception
         last_receipt = Receipt.objects.order_by('-id').first()
         num = 1
         if last_receipt and last_receipt.receipt_number:
@@ -418,87 +426,132 @@ class ReceiptCreateSerializer(serializers.ModelSerializer):
                 num = 1
         receipt_number = f"REC-{date.today().year}-{num:04d}"
 
+        # Créer la réception
         receipt = Receipt.objects.create(
             receipt_number=receipt_number,
             status='in_progress',
             **validated_data
         )
 
+        # Traiter chaque ligne de réception
         for line_data in lines_data:
             po_line = line_data['po_line']
             quantity_received = line_data['quantity_received']
             quantity_damaged = line_data.get('quantity_damaged', 0)
-            lot_number = line_data.get('lot_number', '')
+            lot_number = line_data.get('lot_number', '').strip()
             expiry_date = line_data.get('expiry_date')
             manufacturing_date = line_data.get('manufacturing_date')
             quality_status = line_data.get('quality_status', 'pending')
             notes = line_data.get('notes', '')
 
+            product = po_line.product
             lot = None
+
+            # Gestion du lot
             if lot_number:
-                lot_defaults = {
-                    'product': po_line.product,
-                    'warehouse': receipt.warehouse,
-                    'initial_quantity': 0,
-                    'current_quantity': 0,
-                    'purchase_price': po_line.unit_price,
-                    'selling_price': po_line.product.selling_price,
-                    'created_by': self.context['request'].user
-                }
+                # Vérifier si le lot existe déjà
+                existing_lot = Lot.objects.filter(
+                    lot_number=lot_number).first()
 
-                if expiry_date:
-                    lot_defaults['expiry_date'] = expiry_date
-                if manufacturing_date:
-                    lot_defaults['manufacturing_date'] = manufacturing_date
-
-                lot, created = Lot.objects.get_or_create(
-                    lot_number=lot_number,
-                    defaults=lot_defaults
-                )
-
-                if not created:
+                if existing_lot:
+                    # Lot existant - on ajoute la quantité
+                    lot = existing_lot
+                    # Si le lot n'a pas d'entrepôt ou est différent, on met à jour
+                    if not lot.warehouse:
+                        lot.warehouse = warehouse
+                    # Ajouter la quantité reçue
+                    lot.current_quantity += quantity_received
+                    # Mettre à jour les dates si elles ne sont pas définies
                     if expiry_date and not lot.expiry_date:
                         lot.expiry_date = expiry_date
                     if manufacturing_date and not lot.manufacturing_date:
                         lot.manufacturing_date = manufacturing_date
+                    lot.save()
+                else:
+                    # Créer un nouveau lot
+                    lot = Lot.objects.create(
+                        lot_number=lot_number,
+                        product=product,
+                        warehouse=warehouse,
+                        initial_quantity=quantity_received,
+                        current_quantity=quantity_received,
+                        purchase_price=po_line.unit_price,
+                        selling_price=product.selling_price,
+                        created_by=user,
+                        expiry_date=expiry_date,
+                        manufacturing_date=manufacturing_date,
+                        status='good'
+                    )
+            else:
+                # Si pas de numéro de lot, on crée un lot automatiquement
+                auto_lot_number = f"LOT-{product.code}-{date.today().strftime('%Y%m%d')}-{ReceiptLine.objects.filter(product=product).count() + 1}"
+                lot = Lot.objects.create(
+                    lot_number=auto_lot_number,
+                    product=product,
+                    warehouse=warehouse,
+                    initial_quantity=quantity_received,
+                    current_quantity=quantity_received,
+                    purchase_price=po_line.unit_price,
+                    selling_price=product.selling_price,
+                    created_by=user,
+                    expiry_date=expiry_date,
+                    manufacturing_date=manufacturing_date,
+                    status='good'
+                )
 
-                lot.initial_quantity += quantity_received
-                lot.current_quantity += quantity_received
-                lot.save()
-
+            # Créer la ligne de réception
             ReceiptLine.objects.create(
                 receipt=receipt,
                 po_line=po_line,
-                product=po_line.product,
+                product=product,
                 quantity_ordered=po_line.quantity,
                 quantity_received=quantity_received,
                 quantity_damaged=quantity_damaged,
                 lot=lot,
-                lot_number=lot_number,
+                lot_number=lot_number if lot_number else auto_lot_number,
                 expiry_date=expiry_date,
                 manufacturing_date=manufacturing_date,
                 quality_status=quality_status,
                 notes=notes
             )
 
-            if lot:
-                StockMovement.objects.create(
-                    product=po_line.product,
-                    lot=lot,
-                    to_warehouse=receipt.warehouse,
-                    movement_type='purchase_in',
-                    quantity=quantity_received,
-                    reference_type='purchase_order',
-                    reference_id=purchase_order.id,
-                    reference_number=purchase_order.po_number,
-                    reason=f"Réception commande {purchase_order.po_number}",
-                    created_by=self.context['request'].user
-                )
+            # --- CORRECTION : MISE À JOUR DU STOCK ---
+            # 1. Récupérer ou créer le stock pour ce produit dans cet entrepôt
+            stock, created = Stock.objects.get_or_create(
+                product=product,
+                warehouse=warehouse,
+                defaults={
+                    'quantity': 0,
+                    'reserved_quantity': 0
+                }
+            )
 
+            # 2. IMPORTANT : Recalculer la quantité totale à partir des lots
+            # Cela évite le double comptage car on ne fait PAS d'addition manuelle
+            stock.update_quantity()
+
+            # 3. Créer le mouvement de stock
+            StockMovement.objects.create(
+                product=product,
+                lot=lot,
+                to_warehouse=warehouse,
+                movement_type='purchase_in',
+                quantity=quantity_received,
+                reference_type='purchase_order',
+                reference_id=purchase_order.id,
+                reference_number=purchase_order.po_number,
+                reason=f"Réception commande {purchase_order.po_number}",
+                created_by=user,
+                notes=f"Réception n°{receipt_number}"
+            )
+
+        # Mettre à jour le statut de la commande
         total_ordered = purchase_order.lines.aggregate(
-            total=Sum('quantity'))['total'] or 0
+            total=Sum('quantity')
+        )['total'] or 0
         total_received = purchase_order.lines.aggregate(
-            total=Sum('quantity_received'))['total'] or 0
+            total=Sum('quantity_received')
+        )['total'] or 0
 
         if total_received >= total_ordered:
             purchase_order.status = 'received'
@@ -506,6 +559,7 @@ class ReceiptCreateSerializer(serializers.ModelSerializer):
             purchase_order.status = 'partial'
         purchase_order.save()
 
+        # Terminer la réception
         receipt.status = 'completed'
         receipt.save()
 
@@ -515,8 +569,9 @@ class ReceiptCreateSerializer(serializers.ModelSerializer):
 
         return receipt
 
-
 # ==================== PURCHASE RETURN ====================
+
+
 class PurchaseReturnLineSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_code = serializers.CharField(source='product.code', read_only=True)

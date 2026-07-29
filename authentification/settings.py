@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "ventes_clients",
     "tresorerie",
     "finances",
+    "dashboard",
 ]
 
 MIDDLEWARE = [
